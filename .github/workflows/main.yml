@@ -63,23 +63,54 @@ jobs:
         run: |
           flyway -baselineOnMigrate="true" -licenseKey="${{ env.FLYWAY_LICENSE_KEY }}" -locations="filesystem:${{ GITHUB.WORKSPACE }}\migrations" info undo info -url="${{ env.JDBC }}" -cleanDisabled="false" -target="${{ env.FIRST_UNDO_SCRIPT }}" -reportFilename="Reports/ValidateUScripts" -errorOverrides="S0001:0:I-" -user=${{ secrets.USER }} -password=${{ secrets.PASSWORD }}
  
-       # Create a directory to stage the artifact files
-      - name: Stage files for publishing
-        if: env.publishArtifacts == 'true'
-        run: |
-          cp -R ${{ GITHUB.WORKSPACE }}/migrations Artifact_Files/Migration/
+
  
-      
-      #After migration scripts are validated, publish them as an artifact
-      - name: Publish Validated Migration Scripts as Artifact
-        if: env.publishArtifacts == 'true'
-        uses: actions/upload-artifact@v2
-        with: 
-          name: flyway-build-artifact
-          path: Artifact_Files/Migration/
- 
-  prod-preparation:
+  QA-preparation:
       name: Production Deployment Preparation - Report Creation
+      # The type of runner that the job will run on
+      runs-on: self-hosted
+      environment: 'prod' #Ensure this environment name is setup in the projects Settings>Environment area. Ensuring any reviewers are also configured
+      if: ${{ true }} #Set this variable to false to temporarily disable the job
+      needs: build
+      env:
+        stage: 'Prod'
+        # For this example, we've hard coded the JDBC here, but you may wish to have them in your project TOML file or as Environment Secrets - (GitHub Settings > Secrets > Actions; specially related to the environment in question) #
+        databaseName: "WidgetProd"
+        JDBC: "jdbc:postgresql://localhost:5432/WidgetProd" 
+
+        check_JDBC: "jdbc:postgresql://localhost:5432/WidgetCheck" 
+        
+        # End of Environment Secrets #
+        generateDriftAndChangeReport: true
+        failReleaseIfDriftDetected: false
+        staticCodeAnalysis: false #Currently not setup in this pipeline
+        publishArtifacts: true
+ 
+      # Steps represent a sequence of tasks that will be executed as part of the job
+      steps:
+        # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+        - uses: actions/checkout@v3
+          
+        # Runs the Flyway Check command, to produce a deployment report, against the Production database
+        - name: Create Check Reports
+          if: env.generateDriftAndChangeReport == 'true'
+          run: |
+            flyway -baselineOnMigrate="true" -licenseKey="${{ env.FLYWAY_LICENSE_KEY }}" -locations="filesystem:${{ GITHUB.WORKSPACE }}\migrations" check -dryrun -changes -drift "-check.failOnDrift=${{ env.failReleaseIfDriftDetected }}" "-check.buildUrl=${{ env.check_JDBC }}" "-check.buildUser=${{ env.check_userName }}" "-check.buildPassword=${{ env.check_password }}" -url="${{ env.JDBC }}" "-reportFilename=${{ GITHUB.WORKSPACE }}\reports\${{ env.databaseName }}-Run-${{ GITHUB.RUN_ID }}-Check-Report.html" -errorOverrides="S0001:0:I-" -user=${{ secrets.USER }} -password=${{ secrets.PASSWORD }}
+          continue-on-error: true
+ 
+         # Create a directory to stage the artifact files
+        - name: Stage files for publishing
+          if: env.publishArtifacts == 'true'
+          run: |
+            cp -R ${{ GITHUB.WORKSPACE }}\reports Artifact_Files/Reports/
+ 
+        - name: Publish Check Report as Artifact
+          uses: actions/upload-artifact@v2
+          with: 
+            name: flyway-reports
+            path: Artifact_Files/Reports/
+          prod-preparation:
+      name: QA Deployment Preparation - Report Creation
       # The type of runner that the job will run on
       runs-on: self-hosted
       environment: 'prod' #Ensure this environment name is setup in the projects Settings>Environment area. Ensuring any reviewers are also configured
